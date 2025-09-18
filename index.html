@@ -3,18 +3,81 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Глитч‑партитура 9×8 — бесконечная сборка</title>
+<title>Глитч‑партитура</title>
 <style>
-  :root{--bg:#0b0c0f;--fg:#e8e9eb;--accent:#7aa2ff}
+  :root{
+    --bg:#0b0c0f;
+    --fg:#e8e9eb;
+    --muted:#9aa0a6;
+    --frame:#13151b;
+    --accent:#7aa2ff;
+    --size:min(90vmin, 840px);
+    --pad:20px;
+  }
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
-  #stage{position:fixed;inset:0;display:block;background:#000}
-  .hud{position:fixed;left:12px;bottom:12px;background:rgba(10,12,16,.6);backdrop-filter:blur(6px);padding:10px 12px;border:1px solid #202228;border-radius:10px}
-  .hud button{all:unset;cursor:pointer;background:#151821;border:1px solid #232633;color:var(--fg);padding:6px 10px;border-radius:8px;margin-right:8px}
-  .hud .stat{opacity:.8}
+  .wrap{min-height:100%;display:grid;place-items:center;padding:24px}
+  .stage-frame{
+    width:calc(var(--size) + var(--pad)*2);
+    height:calc(var(--size) + var(--pad)*2);
+    background:
+      linear-gradient(180deg,#191c24,#0e1116) padding-box,
+      linear-gradient(135deg,rgba(255,255,255,.12),rgba(122,162,255,.35),rgba(255,255,255,.08)) border-box;
+    border:1.5px solid transparent;
+    border-radius:16px;
+    box-shadow:
+      inset 0 0 0 1px rgba(255,255,255,.06),
+      0 8px 30px rgba(0,0,0,.45);
+    display:grid;place-items:center;position:relative;
+  }
+  .stage-inner{
+    width:var(--size);height:var(--size);
+    position:relative;border-radius:12px;overflow:hidden;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);
+    background:#000;
+  }
+  canvas#stage{display:block;width:100%;height:100%;image-rendering:auto;background:#000}
+  /* Светящийся оверлей для «суперсияния» */
+  .glow{
+    position:absolute;inset:-10% -10%;
+    pointer-events:none;mix-blend-mode:color-dodge;opacity:.35;
+    background:
+      radial-gradient(120% 90% at 20% 10%, rgba(255,120,120,.25) 0%, transparent 60%),
+      radial-gradient(100% 80% at 90% 20%, rgba(120,255,180,.18) 0%, transparent 60%),
+      radial-gradient(100% 100% at 50% 90%, rgba(120,160,255,.22) 0%, transparent 70%);
+    filter: blur(18px) saturate(160%);
+  }
+  /* Незаметная пленочная зернистость поверх всего */
+  .grain{
+    position:absolute;inset:0;pointer-events:none;opacity:.12;mix-blend-mode:soft-light;
+    background-image:
+      repeating-conic-gradient(from 0deg, rgba(255,255,255,.015) 0% 0.25%, transparent 0.25% 0.5%);
+    animation:grainShift 8s linear infinite;
+  }
+  @keyframes grainShift{
+    0%{transform:translate3d(0,0,0)}
+    100%{transform:translate3d(-2%,1%,0)}
+  }
+  .hud{
+    position:fixed;left:16px;bottom:16px;
+    display:flex;gap:8px;align-items:center;
+    background:rgba(10,12,16,.6);backdrop-filter:blur(6px);
+    border:1px solid #222630;padding:8px 10px;border-radius:10px
+  }
+  .hud button{all:unset;cursor:pointer;background:#151821;border:1px solid #232633;color:var(--fg);padding:6px 10px;border-radius:8px}
+  .hud .stat{color:var(--muted)}
 </style>
 </head>
 <body>
-<canvas id="stage"></canvas>
+<div class="wrap">
+  <div class="stage-frame" aria-label="рамка холста">
+    <div class="stage-inner">
+      <canvas id="stage" width="1024" height="1024"></canvas>
+      <div class="glow"></div>
+      <div class="grain"></div>
+    </div>
+  </div>
+</div>
+
 <div class="hud">
   <button id="toggle">Пауза</button>
   <button id="reroll">Новая волна</button>
@@ -23,13 +86,16 @@
 
 <script>
 (()=>{
-// ====== Конфиг ======
-const WORKS = 9, LAYERS = 8;                           // 9 исходников × 8 слоёв
-const IMG_PATH = (w,l)=>`assets/layers/W${w}/${String(l).padStart(2,'0')}.png`;
-const BLENDS = ['source-over','lighter','multiply','screen','overlay','darken','lighten','difference','exclusion','color-burn','color-dodge','hard-light','soft-light'];
-const DPR = Math.max(1, Math.min(window.devicePixelRatio||1, 2));
+// ---------- Конфиг ----------
+const WORKS=9, LAYERS=8;
+const IMG=(w,l)=>`assets/layers/W${w}/${String(l).padStart(2,'0')}.png`;
+const BLENDS=['source-over','lighter','screen','overlay','color-dodge','plus-lighter','soft-light','difference','exclusion','multiply'];
+const DPR = Math.min(2, Math.max(1, window.devicePixelRatio||1));
+const MAX_SPRITES = 18;           // одновременно «активных» наложений
+const RETARGET_EVERY = 2200;      // мс — как часто «дрейф» меняет цель
+const ctx = stage.getContext('2d',{ alpha:false, desynchronized:true });
 
-// Стохастика с seed (для воспроизводимости при желании)
+// ---------- Вспомогательная стохастика ----------
 let seed = Math.floor(Math.random()*1e9);
 function rand(){ // Mulberry32
   seed |= 0; seed = seed + 0x6D2B79F5 | 0;
@@ -38,32 +104,22 @@ function rand(){ // Mulberry32
   return ((t ^ t >>> 14) >>> 0) / 4294967296;
 }
 function rint(a,b){return Math.floor(rand()*(b-a+1))+a}
-function rpick(arr){return arr[rint(0,arr.length-1)]}
+function rpick(a){return a[rint(0,a.length-1)]}
+function lerp(a,b,t){return a+(b-a)*t}
+function ease(t){return t<.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2}
 
-// ====== Canvas ======
-const canvas = document.getElementById('stage');
-const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
-function resize(){
-  const w = Math.max(320, window.innerWidth);
-  const h = Math.max(320, window.innerHeight);
-  canvas.width = Math.floor(w*DPR);
-  canvas.height = Math.floor(h*DPR);
-  canvas.style.width = w+'px';
-  canvas.style.height = h+'px';
-  ctx.setTransform(DPR,0,0,DPR,0,0);
-}
-window.addEventListener('resize', resize);
+// Псевдо‑шум для плавности (комбинация синусов)
+function n1(t, sp=1){return Math.sin(t*sp*0.0007)+Math.sin(t*sp*0.0013+1.7)+Math.cos(t*sp*0.0009+0.3)}
 
-// ====== Загрузка изображений ======
-const images = [];
+// ---------- Загрузка ассетов ----------
+const images=[];
 async function loadAll(){
   const jobs=[];
   for(let w=1; w<=WORKS; w++){
     for(let l=1; l<=LAYERS; l++){
       const img = new Image();
-      img.decoding = 'sync';
-      img.loading = 'eager';
-      img.src = IMG_PATH(w,l);
+      img.decoding='sync'; img.loading='eager'; img.crossOrigin='anonymous';
+      img.src = IMG(w,l);
       images.push(img);
       jobs.push(img.decode().catch(()=>{}));
     }
@@ -71,130 +127,163 @@ async function loadAll(){
   await Promise.allSettled(jobs);
 }
 
-// ====== Глитч‑процедуры ======
-function setFilterProfile(t){
-  // динамический набор фильтров Canvas 2D
-  const inv = rand()<0.15 ? 'invert(1)' : 'invert(0)';
-  const hue = `hue-rotate(${Math.floor((Math.sin(t*.0003)+1)*180)}deg)`;
-  const sat = `saturate(${120 + Math.floor(80*Math.sin(t*.0007))}%)`;
-  const con = `contrast(${110 + Math.floor(50*Math.cos(t*.0005))}%)`;
-  const brt = `brightness(${100 + Math.floor(20*Math.sin(t*.0009))}%)`;
-  const blur= rand()<0.12 ? `blur(${rint(1,3)}px)` : 'blur(0px)';
-  ctx.filter = [inv,hue,sat,con,brt,blur].join(' ');
-}
-
-function drawLayerTransformed(img, t){
-  const W = canvas.width/DPR, H = canvas.height/DPR;
-  const scale = 0.5 + rand()*1.2;
-  const ang = (rand()*Math.PI*2) * (rand()<0.4?1:0.2);
-  const dx = (W/2) + (Math.sin(t*.0008 + rand()*6.28)*W*0.35) + rint(-40,40);
-  const dy = (H/2) + (Math.cos(t*.0006 + rand()*6.28)*H*0.35) + rint(-40,40);
-  const dw = img.width * scale, dh = img.height * scale;
-
-  ctx.save();
-  ctx.translate(dx, dy);
-  ctx.rotate(ang);
-  if(rand()<0.3) ctx.scale(-1,1); // зеркалирование
-  ctx.globalCompositeOperation = rpick(BLENDS);
-  ctx.globalAlpha = 0.35 + rand()*0.65;
-  ctx.drawImage(img, -dw/2, -dh/2, dw, dh);
-  ctx.restore();
-}
-
-function glitchSlices(img, t){
-  // Горизонтальные сдвиги «слайсами» без getImageData
-  const W = canvas.width/DPR, H = canvas.height/DPR;
-  const scale = 0.6 + rand()*1.0;
-  const dw = img.width*scale, dh = img.height*scale;
-  const baseX = (W - dw)/2 + rint(-80,80), baseY = (H - dh)/2 + rint(-80,80);
-
-  const slices = rint(6,14);
-  for(let i=0;i<slices;i++){
-    const sy = rint(0, img.height-1);
-    const sh = rint(2, Math.max(4, Math.floor(img.height*0.06)));
-    const sx = 0, sw = img.width;
-    const jitter = rint(-Math.floor(dw*0.2), Math.floor(dw*0.2));
-    ctx.save();
-    ctx.globalCompositeOperation = rpick(BLENDS);
-    ctx.globalAlpha = 0.35 + rand()*0.5;
-    ctx.drawImage(img, sx, sy, sw, sh, baseX + jitter, baseY + sy*scale, sw*scale, sh*scale);
-    ctx.restore();
-  }
-}
-
-function channelSplit(img){
-  // Трёхкратный оверлей с hue‑rotate и «lighter»
-  const W = canvas.width/DPR, H = canvas.height/DPR;
-  const scale = 0.75 + rand()*0.9;
-  const dw = img.width*scale, dh = img.height*scale;
-  const dx = (W - dw)/2, dy = (H - dh)/2;
-  const offs = [[-3,0],[0,0],[3,0]];
-  const hues = [0,120,240];
-  for(let i=0;i<3;i++){
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.filter = `hue-rotate(${hues[i]}deg) saturate(220%) contrast(120%)`;
-    ctx.globalAlpha = 0.35;
-    ctx.drawImage(img, dx+offs[i][0], dy+offs[i][1], dw, dh);
-    ctx.restore();
-  }
-}
-
-// ====== Главный цикл ======
-let running = true;
-let lastHash = '';
-const info = document.getElementById('info');
-function frame(ts){
-  if(!running){ requestAnimationFrame(frame); return; }
+// ---------- Ресайз квадрата ----------
+function fitSquare(){
+  const css = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--size'));
+  const s = Math.max(320, Math.floor(css));
+  stage.style.width = s+'px';
+  stage.style.height = s+'px';
+  stage.width = Math.floor(s*DPR);
+  stage.height= Math.floor(s*DPR);
   ctx.setTransform(DPR,0,0,DPR,0,0);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = 1;
-  ctx.filter = 'none';
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0,0, canvas.width/DPR, canvas.height/DPR);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+}
+window.addEventListener('resize', fitSquare);
 
-  setFilterProfile(ts);
+// ---------- Спрайты с «дрейфом» параметров ----------
+class Sprite{
+  constructor(img){
+    this.img=img;
+    this.reset(true);
+  }
+  reset(init=false){
+    const t=performance.now();
+    // текущие значения
+    if(init){
+      this.x=0; this.y=0; this.s=1; this.r=0; this.a=.6; this.blend='source-over'; this.inv=0;
+    }
+    // целевые значения
+    this.tx = rint(-140,140);
+    this.ty = rint(-140,140);
+    this.ts = 0.5 + rand()*1.6;
+    this.tr = (rand()*Math.PI*2) * (rand()<0.5?1:0.25);
+    this.ta = 0.25 + rand()*0.75;
+    this.tblend = rpick(BLENDS);
+    this.tinv = rand()<0.22 ? 1 : 0; // инверсия иногда
+    this.tStart = t;
+    this.tEnd = t + RETARGET_EVERY + rint(-600,600);
+  }
+  step(now){
+    const k = Math.min(1, (now - this.tStart)/(this.tEnd - this.tStart));
+    const e = ease(k);
+    this.x = lerp(this.x, this.tx, e*0.08);
+    this.y = lerp(this.y, this.ty, e*0.08);
+    this.s = lerp(this.s, this.ts, e*0.08);
+    this.r = lerp(this.r, this.tr, e*0.08);
+    this.a = lerp(this.a, this.ta, e*0.08);
+    if(k>=1) this.reset();
+  }
+  draw(now){
+    const W=stage.width/DPR, H=stage.height/DPR;
+    const dw=this.img.width*this.s, dh=this.img.height*this.s;
+    ctx.save();
+    ctx.translate(W/2 + this.x + Math.sin(now*0.0006)*20, H/2 + this.y + Math.cos(now*0.0005)*20);
+    ctx.rotate(this.r + Math.sin(now*0.0003)*0.15);
+    if(rand()<0.1) ctx.scale(-1,1); // зеркальные редкие
+    ctx.globalCompositeOperation = this.tblend;
+    ctx.globalAlpha = this.a;
 
-  // Сценарий проходов
-  const passes = rint(10, 24);
-  const used = [];
-  for(let p=0;p<passes;p++){
-    const img = images[rint(0, images.length-1)];
-    used.push(img.src.split('/').slice(-2).join('/')); // Wk/nn.png
-    const roll = rand();
-    if(roll < 0.40){
-      drawLayerTransformed(img, ts);
-    }else if(roll < 0.75){
-      glitchSlices(img, ts);
-    }else{
-      channelSplit(img);
+    // Локальный фильтр спрайта: насыщенность/контраст и редкая инверсия
+    const inv = this.tinv ? 'invert(1)' : 'invert(0)';
+    const sat = `saturate(${180 + Math.floor(80*Math.sin(now*0.0008))}%)`;
+    const con = `contrast(${120 + Math.floor(60*Math.cos(now*0.0009))}%)`;
+    const hue = `hue-rotate(${Math.floor((n1(now,1)+2)*90)}deg)`;
+    const blur= rand()<0.06 ? `blur(${rint(1,2)}px)` : 'blur(0px)';
+    ctx.filter = [inv,hue,sat,con,blur].join(' ');
+
+    ctx.drawImage(this.img, -dw/2, -dh/2, dw, dh);
+    ctx.restore();
+
+    // Гладкий «слайс‑глитч» редкими волнами
+    if(rand()<0.06){
+      const slices = rint(3,7);
+      for(let i=0;i<slices;i++){
+        const sy = rint(0, this.img.height-1);
+        const sh = rint(2, Math.max(4, Math.floor(this.img.height*0.05)));
+        const jitter = rint(-Math.floor(dw*0.15), Math.floor(dw*0.15));
+        ctx.save();
+        ctx.globalCompositeOperation = rpick(['difference','exclusion','color-dodge','plus-lighter']);
+        ctx.globalAlpha = 0.25 + rand()*0.4;
+        ctx.filter = `hue-rotate(${rint(-20,20)}deg) saturate(220%) contrast(130%)`;
+        ctx.drawImage(this.img, 0, sy, this.img.width, sh,
+          W/2 + this.x - dw/2 + jitter,
+          H/2 + this.y - dh/2 + sy*this.s,
+          this.img.width*this.s, sh*this.s);
+        ctx.restore();
+      }
     }
   }
-
-  // Простая отбраковка «похожих» кадров
-  const hash = used.sort().slice(0,12).join('|');
-  if(hash === lastHash){ seed = (seed+1)>>>0; } // сдвиг сидов
-  lastHash = hash;
-
-  info.textContent = `layers:${used.length} seed:${seed>>>0}`;
-  requestAnimationFrame(frame);
 }
 
-// ====== UI ======
+// ---------- Сцена ----------
+const sprites=[];
+function populate(){
+  sprites.length=0;
+  for(let i=0;i<MAX_SPRITES;i++){
+    sprites.push(new Sprite(images[rint(0,images.length-1)]));
+  }
+}
+
+// Фоновая цветокоррекция всей сцены
+function sceneFilters(now){
+  const hue = Math.floor((Math.sin(now*0.0002)+1)*90);
+  const sat = 140 + Math.floor(40*Math.sin(now*0.0004+1.3));
+  const con = 115 + Math.floor(30*Math.cos(now*0.00033+0.5));
+  const brt = 102 + Math.floor(8*Math.sin(now*0.00027));
+  ctx.filter = `hue-rotate(${hue}deg) saturate(${sat}%) contrast(${con}%) brightness(${brt}%)`;
+}
+
+// ---------- Цикл ----------
+let running=true, last=0, acc=0;
+const info=document.getElementById('info');
+function tick(ts){
+  if(!running){ requestAnimationFrame(tick); return; }
+  if(!last) last=ts;
+  // dt с ограничением — для «равномерной» анимации на разных дисплеях
+  const dt=Math.min(32, ts-last); last=ts; acc+=dt;
+
+  // Очистка
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.globalCompositeOperation='source-over';
+  ctx.globalAlpha = 1; ctx.filter='none';
+  ctx.fillStyle = '#000'; ctx.fillRect(0,0, stage.width/DPR, stage.height/DPR);
+
+  // Общие фильтры сцены
+  sceneFilters(ts);
+
+  // Обновление спрайтов
+  for(const s of sprites){ s.step(ts); s.draw(ts); }
+
+  // Лёгкая виньетка
+  const W=stage.width/DPR, H=stage.height/DPR;
+  const grd=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.2, W/2,H/2,Math.max(W,H)*0.7);
+  grd.addColorStop(0,'rgba(0,0,0,0)');
+  grd.addColorStop(1,'rgba(0,0,0,0.18)');
+  ctx.filter='none';
+  ctx.globalCompositeOperation='multiply';
+  ctx.fillStyle=grd; ctx.fillRect(0,0,W,H);
+
+  info.textContent=`sprites:${sprites.length} seed:${seed>>>0}`;
+  requestAnimationFrame(tick);
+}
+
+// ---------- UI ----------
 document.getElementById('toggle').addEventListener('click',()=>{
-  running = !running;
-  document.getElementById('toggle').textContent = running ? 'Пауза' : 'Старт';
+  running=!running;
+  document.getElementById('toggle').textContent = running?'Пауза':'Старт';
 });
 document.getElementById('reroll').addEventListener('click',()=>{
-  seed = Math.floor(Math.random()*1e9);
+  seed=Math.floor(Math.random()*1e9);
+  populate();
 });
 
-// ====== Старт ======
+// ---------- Запуск ----------
 (async function init(){
-  resize();
+  fitSquare();
   await loadAll();
-  info.textContent = 'готово';
-  requestAnimationFrame(frame);
+  populate();
+  requestAnimationFrame(tick);
 })();
 })();
 </script>
