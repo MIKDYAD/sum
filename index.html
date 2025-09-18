@@ -20,28 +20,44 @@
   @media (max-width: 480px){
     :root{ --size:min(94vmin, 420px); --pad:10px; }
   }
+  @media (max-width: 480px){
+  .hud{ left:50%; right:auto; transform:translateX(-50%); bottom: max(10px, env(safe-area-inset-bottom, 0px)); }
+}
+
 
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
-  .wrap{min-height:100%;display:grid;place-items:center;padding:clamp(12px,2.5vmin,24px)}
-  .stage-frame{
-    width:calc(var(--size) + var(--pad)*2);
-    height:calc(var(--size) + var(--pad)*2);
-    background:
-      linear-gradient(180deg,#191c24,#0e1116) padding-box,
-      linear-gradient(135deg,rgba(255,255,255,.12),rgba(122,162,255,.35),rgba(255,255,255,.08)) border-box;
-    border:1.5px solid transparent;
-    border-radius:16px;
-    box-shadow:
-      inset 0 0 0 1px rgba(255,255,255,.06),
-      0 8px 30px rgba(0,0,0,.45);
-    display:grid;place-items:center;position:relative;
-  }
-  .stage-inner{
-    width:var(--size);height:var(--size);
-    position:relative;border-radius:12px;overflow:hidden;
-    box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);
-    background:#000;
-  }
+  /* было: .wrap{min-height:100%;display:grid;place-items:center;padding:clamp(12px,2.5vmin,24px)} */
+.wrap{
+  min-height:100dvh;
+  display:grid;
+  place-items:center;
+  padding: max(12px, 2.5vmin);
+  padding-top: calc(max(12px, 2.5vmin) + env(safe-area-inset-top, 0px));
+  padding-right: calc(max(12px, 2.5vmin) + env(safe-area-inset-right, 0px));
+  padding-bottom: calc(max(12px, 2.5vmin) + env(safe-area-inset-bottom, 0px));
+  padding-left: calc(max(12px, 2.5vmin) + env(safe-area-inset-left, 0px));
+}
+
+/* было: .stage-frame{ width:calc(var(--size) + var(--pad)*2); height:calc(var(--size)+var(--pad)*2); } */
+.stage-frame{
+  inline-size: fit-content;
+  block-size: fit-content;
+  max-inline-size: calc(100vw - (env(safe-area-inset-left,0px) + env(safe-area-inset-right,0px) + 24px));
+  max-block-size:  calc(100dvh - (env(safe-area-inset-top,0px)  + env(safe-area-inset-bottom,0px) + 24px));
+  padding: var(--pad);
+  /* остальной стиль рамки оставить как было */
+}
+
+/* квадрат внутри рамки получает авто-ограничение */
+.stage-inner{
+  width: var(--size);
+  height: var(--size);
+  max-width: calc(100vw - (env(safe-area-inset-left,0px) + env(safe-area-inset-right,0px) + 48px));
+  max-height: calc(100dvh - (env(safe-area-inset-top,0px) + env(safe-area-inset-bottom,0px) + 48px));
+  aspect-ratio: 1 / 1;
+  /* остальное без изменений */
+}
+
   canvas#stage{display:block;width:100%;height:100%;image-rendering:auto;background:#000}
   .glow{
     position:absolute;inset:-12% -12%;
@@ -119,17 +135,20 @@ const ro = new ResizeObserver(()=> fitSquare());
 ro.observe(inner);
 
 function fitSquare(){
+  const inner = document.getElementById('stageInner');
   const rect = inner.getBoundingClientRect();
-  const size = Math.floor(Math.min(rect.width, rect.height));
-  DPR = Math.min(DPR, 2);
-  canvas.style.width  = size+'px';
-  canvas.style.height = size+'px';
-  canvas.width  = Math.floor(size * DPR);
-  canvas.height = Math.floor(size * DPR);
-  ctx.setTransform(DPR,0,0,DPR,0,0);
+  // используем меньшую из сторон и страхуемся от отрицательных значений
+  const cssSize = Math.max(50, Math.floor(Math.min(rect.width, rect.height)));
+  const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+  canvas.style.width  = cssSize + 'px';
+  canvas.style.height = cssSize + 'px';
+  canvas.width  = Math.floor(cssSize * dpr);
+  canvas.height = Math.floor(cssSize * dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 }
+
 
 // ---------- Стохастика ----------
 let seed = Math.floor(Math.random()*1e9);
