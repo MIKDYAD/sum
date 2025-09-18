@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Глитч‑партитура 9×8 — бесконечная сборка</title>
+<style>
+  :root{--bg:#0b0c0f;--fg:#e8e9eb;--accent:#7aa2ff}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+  #stage{position:fixed;inset:0;display:block;background:#000}
+  .hud{position:fixed;left:12px;bottom:12px;background:rgba(10,12,16,.6);backdrop-filter:blur(6px);padding:10px 12px;border:1px solid #202228;border-radius:10px}
+  .hud button{all:unset;cursor:pointer;background:#151821;border:1px solid #232633;color:var(--fg);padding:6px 10px;border-radius:8px;margin-right:8px}
+  .hud .stat{opacity:.8}
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div class="hud">
+  <button id="toggle">Пауза</button>
+  <button id="reroll">Новая волна</button>
+  <span class="stat" id="info">загрузка…</span>
+</div>
+
+<script>
+(()=>{
+// ====== Конфиг ======
+const WORKS = 9, LAYERS = 8;                           // 9 исходников × 8 слоёв
+const IMG_PATH = (w,l)=>`assets/layers/W${w}/${String(l).padStart(2,'0')}.png`;
+const BLENDS = ['source-over','lighter','multiply','screen','overlay','darken','lighten','difference','exclusion','color-burn','color-dodge','hard-light','soft-light'];
+const DPR = Math.max(1, Math.min(window.devicePixelRatio||1, 2));
+
+// Стохастика с seed (для воспроизводимости при желании)
+let seed = Math.floor(Math.random()*1e9);
+function rand(){ // Mulberry32
+  seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+  let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+  return ((t ^ t >>> 14) >>> 0) / 4294967296;
+}
+function rint(a,b){return Math.floor(rand()*(b-a+1))+a}
+function rpick(arr){return arr[rint(0,arr.length-1)]}
+
+// ====== Canvas ======
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+function resize(){
+  const w = Math.max(320, window.innerWidth);
+  const h = Math.max(320, window.innerHeight);
+  canvas.width = Math.floor(w*DPR);
+  canvas.height = Math.floor(h*DPR);
+  canvas.style.width = w+'px';
+  canvas.style.height = h+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize', resize);
+
+// ====== Загрузка изображений ======
+const images = [];
+async function loadAll(){
+  const jobs=[];
+  for(let w=1; w<=WORKS; w++){
+    for(let l=1; l<=LAYERS; l++){
+      const img = new Image();
+      img.decoding = 'sync';
+      img.loading = 'eager';
+      img.src = IMG_PATH(w,l);
+      images.push(img);
+      jobs.push(img.decode().catch(()=>{}));
+    }
+  }
+  await Promise.allSettled(jobs);
+}
+
+// ====== Глитч‑процедуры ======
+function setFilterProfile(t){
+  // динамический набор фильтров Canvas 2D
+  const inv = rand()<0.15 ? 'invert(1)' : 'invert(0)';
+  const hue = `hue-rotate(${Math.floor((Math.sin(t*.0003)+1)*180)}deg)`;
+  const sat = `saturate(${120 + Math.floor(80*Math.sin(t*.0007))}%)`;
+  const con = `contrast(${110 + Math.floor(50*Math.cos(t*.0005))}%)`;
+  const brt = `brightness(${100 + Math.floor(20*Math.sin(t*.0009))}%)`;
+  const blur= rand()<0.12 ? `blur(${rint(1,3)}px)` : 'blur(0px)';
+  ctx.filter = [inv,hue,sat,con,brt,blur].join(' ');
+}
+
+function drawLayerTransformed(img, t){
+  const W = canvas.width/DPR, H = canvas.height/DPR;
+  const scale = 0.5 + rand()*1.2;
+  const ang = (rand()*Math.PI*2) * (rand()<0.4?1:0.2);
+  const dx = (W/2) + (Math.sin(t*.0008 + rand()*6.28)*W*0.35) + rint(-40,40);
+  const dy = (H/2) + (Math.cos(t*.0006 + rand()*6.28)*H*0.35) + rint(-40,40);
+  const dw = img.width * scale, dh = img.height * scale;
+
+  ctx.save();
+  ctx.translate(dx, dy);
+  ctx.rotate(ang);
+  if(rand()<0.3) ctx.scale(-1,1); // зеркалирование
+  ctx.globalCompositeOperation = rpick(BLENDS);
+  ctx.globalAlpha = 0.35 + rand()*0.65;
+  ctx.drawImage(img, -dw/2, -dh/2, dw, dh);
+  ctx.restore();
+}
+
+function glitchSlices(img, t){
+  // Горизонтальные сдвиги «слайсами» без getImageData
+  const W = canvas.width/DPR, H = canvas.height/DPR;
+  const scale = 0.6 + rand()*1.0;
+  const dw = img.width*scale, dh = img.height*scale;
+  const baseX = (W - dw)/2 + rint(-80,80), baseY = (H - dh)/2 + rint(-80,80);
+
+  const slices = rint(6,14);
+  for(let i=0;i<slices;i++){
+    const sy = rint(0, img.height-1);
+    const sh = rint(2, Math.max(4, Math.floor(img.height*0.06)));
+    const sx = 0, sw = img.width;
+    const jitter = rint(-Math.floor(dw*0.2), Math.floor(dw*0.2));
+    ctx.save();
+    ctx.globalCompositeOperation = rpick(BLENDS);
+    ctx.globalAlpha = 0.35 + rand()*0.5;
+    ctx.drawImage(img, sx, sy, sw, sh, baseX + jitter, baseY + sy*scale, sw*scale, sh*scale);
+    ctx.restore();
+  }
+}
+
+function channelSplit(img){
+  // Трёхкратный оверлей с hue‑rotate и «lighter»
+  const W = canvas.width/DPR, H = canvas.height/DPR;
+  const scale = 0.75 + rand()*0.9;
+  const dw = img.width*scale, dh = img.height*scale;
+  const dx = (W - dw)/2, dy = (H - dh)/2;
+  const offs = [[-3,0],[0,0],[3,0]];
+  const hues = [0,120,240];
+  for(let i=0;i<3;i++){
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.filter = `hue-rotate(${hues[i]}deg) saturate(220%) contrast(120%)`;
+    ctx.globalAlpha = 0.35;
+    ctx.drawImage(img, dx+offs[i][0], dy+offs[i][1], dw, dh);
+    ctx.restore();
+  }
+}
+
+// ====== Главный цикл ======
+let running = true;
+let lastHash = '';
+const info = document.getElementById('info');
+function frame(ts){
+  if(!running){ requestAnimationFrame(frame); return; }
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.filter = 'none';
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0,0, canvas.width/DPR, canvas.height/DPR);
+
+  setFilterProfile(ts);
+
+  // Сценарий проходов
+  const passes = rint(10, 24);
+  const used = [];
+  for(let p=0;p<passes;p++){
+    const img = images[rint(0, images.length-1)];
+    used.push(img.src.split('/').slice(-2).join('/')); // Wk/nn.png
+    const roll = rand();
+    if(roll < 0.40){
+      drawLayerTransformed(img, ts);
+    }else if(roll < 0.75){
+      glitchSlices(img, ts);
+    }else{
+      channelSplit(img);
+    }
+  }
+
+  // Простая отбраковка «похожих» кадров
+  const hash = used.sort().slice(0,12).join('|');
+  if(hash === lastHash){ seed = (seed+1)>>>0; } // сдвиг сидов
+  lastHash = hash;
+
+  info.textContent = `layers:${used.length} seed:${seed>>>0}`;
+  requestAnimationFrame(frame);
+}
+
+// ====== UI ======
+document.getElementById('toggle').addEventListener('click',()=>{
+  running = !running;
+  document.getElementById('toggle').textContent = running ? 'Пауза' : 'Старт';
+});
+document.getElementById('reroll').addEventListener('click',()=>{
+  seed = Math.floor(Math.random()*1e9);
+});
+
+// ====== Старт ======
+(async function init(){
+  resize();
+  await loadAll();
+  info.textContent = 'готово';
+  requestAnimationFrame(frame);
+})();
+})();
+</script>
+</body>
+</html>
