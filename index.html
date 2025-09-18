@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Глитч‑партитура</title>
+<title>=sum: глитч‑партитура</title>
 <style>
   :root{
     --bg:#0b0c0f;
@@ -46,7 +46,7 @@
       radial-gradient(100% 100% at 50% 90%, rgba(120,160,255,.22) 0%, transparent 70%);
     filter: blur(18px) saturate(160%);
   }
-  /* Незаметная пленочная зернистость поверх всего */
+  /* Плёночная зернистость */
   .grain{
     position:absolute;inset:0;pointer-events:none;opacity:.12;mix-blend-mode:soft-light;
     background-image:
@@ -91,11 +91,14 @@ const WORKS=9, LAYERS=8;
 const IMG=(w,l)=>`assets/layers/W${w}/${String(l).padStart(2,'0')}.png`;
 const BLENDS=['source-over','lighter','screen','overlay','color-dodge','plus-lighter','soft-light','difference','exclusion','multiply'];
 const DPR = Math.min(2, Math.max(1, window.devicePixelRatio||1));
-const MAX_SPRITES = 18;           // одновременно «активных» наложений
-const RETARGET_EVERY = 2200;      // мс — как часто «дрейф» меняет цель
-const ctx = stage.getContext('2d',{ alpha:false, desynchronized:true });
+const MAX_SPRITES = 18;
+const RETARGET_EVERY = 2200;
 
-// ---------- Вспомогательная стохастика ----------
+// Явно выбираем canvas и контекст
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d', { alpha:false, desynchronized:true });
+
+// ---------- Стохастика ----------
 let seed = Math.floor(Math.random()*1e9);
 function rand(){ // Mulberry32
   seed |= 0; seed = seed + 0x6D2B79F5 | 0;
@@ -107,60 +110,60 @@ function rint(a,b){return Math.floor(rand()*(b-a+1))+a}
 function rpick(a){return a[rint(0,a.length-1)]}
 function lerp(a,b,t){return a+(b-a)*t}
 function ease(t){return t<.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2}
-
-// Псевдо‑шум для плавности (комбинация синусов)
 function n1(t, sp=1){return Math.sin(t*sp*0.0007)+Math.sin(t*sp*0.0013+1.7)+Math.cos(t*sp*0.0009+0.3)}
 
-// ---------- Загрузка ассетов ----------
+// ---------- Загрузка PNG слоёв (без 404) ----------
 const images=[];
 async function loadAll(){
   const jobs=[];
   for(let w=1; w<=WORKS; w++){
     for(let l=1; l<=LAYERS; l++){
-      const img = new Image();
-      img.decoding='sync'; img.loading='eager'; img.crossOrigin='anonymous';
-      img.src = IMG(w,l);
-      images.push(img);
-      jobs.push(img.decode().catch(()=>{}));
+      const src = IMG(w,l);
+      jobs.push(new Promise((resolve, reject)=>{
+        const img = new Image();
+        img.decoding='sync'; img.loading='eager';
+        img.onload = ()=> (img.naturalWidth>0 ? resolve(img) : reject(new Error('empty '+src)));
+        img.onerror = ()=> reject(new Error('load-failed '+src));
+        img.src = src;
+      }));
     }
   }
-  await Promise.allSettled(jobs);
+  const res = await Promise.allSettled(jobs);
+  for(const r of res){ if(r.status==='fulfilled') images.push(r.value); }
+  if(images.length===0){
+    document.getElementById('info').textContent='Нет загруженных PNG: проверьте assets/layers/W*/**.png';
+    throw new Error('no-images');
+  }
 }
 
-// ---------- Ресайз квадрата ----------
+// ---------- Квадратный размер по реальной геометрии ----------
 function fitSquare(){
-  const css = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--size'));
-  const s = Math.max(320, Math.floor(css));
-  stage.style.width = s+'px';
-  stage.style.height = s+'px';
-  stage.width = Math.floor(s*DPR);
-  stage.height= Math.floor(s*DPR);
+  const inner = document.querySelector('.stage-inner');
+  const rect = inner.getBoundingClientRect();
+  const s = Math.floor(Math.min(rect.width, rect.height));
+  canvas.style.width = s+'px';
+  canvas.style.height = s+'px';
+  canvas.width  = Math.floor(s * DPR);
+  canvas.height = Math.floor(s * DPR);
   ctx.setTransform(DPR,0,0,DPR,0,0);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 }
 window.addEventListener('resize', fitSquare);
 
-// ---------- Спрайты с «дрейфом» параметров ----------
+// ---------- Спрайты с плавным «дрейфом» ----------
 class Sprite{
-  constructor(img){
-    this.img=img;
-    this.reset(true);
-  }
+  constructor(img){ this.img=img; this.reset(true); }
   reset(init=false){
     const t=performance.now();
-    // текущие значения
-    if(init){
-      this.x=0; this.y=0; this.s=1; this.r=0; this.a=.6; this.blend='source-over'; this.inv=0;
-    }
-    // целевые значения
+    if(init){ this.x=0; this.y=0; this.s=1; this.r=0; this.a=.6; this.blend='source-over'; this.inv=0; }
     this.tx = rint(-140,140);
     this.ty = rint(-140,140);
     this.ts = 0.5 + rand()*1.6;
     this.tr = (rand()*Math.PI*2) * (rand()<0.5?1:0.25);
     this.ta = 0.25 + rand()*0.75;
     this.tblend = rpick(BLENDS);
-    this.tinv = rand()<0.22 ? 1 : 0; // инверсия иногда
+    this.tinv = rand()<0.22 ? 1 : 0;
     this.tStart = t;
     this.tEnd = t + RETARGET_EVERY + rint(-600,600);
   }
@@ -175,16 +178,15 @@ class Sprite{
     if(k>=1) this.reset();
   }
   draw(now){
-    const W=stage.width/DPR, H=stage.height/DPR;
+    const W=canvas.width/DPR, H=canvas.height/DPR;
     const dw=this.img.width*this.s, dh=this.img.height*this.s;
     ctx.save();
     ctx.translate(W/2 + this.x + Math.sin(now*0.0006)*20, H/2 + this.y + Math.cos(now*0.0005)*20);
     ctx.rotate(this.r + Math.sin(now*0.0003)*0.15);
-    if(rand()<0.1) ctx.scale(-1,1); // зеркальные редкие
+    if(rand()<0.1) ctx.scale(-1,1);
     ctx.globalCompositeOperation = this.tblend;
     ctx.globalAlpha = this.a;
 
-    // Локальный фильтр спрайта: насыщенность/контраст и редкая инверсия
     const inv = this.tinv ? 'invert(1)' : 'invert(0)';
     const sat = `saturate(${180 + Math.floor(80*Math.sin(now*0.0008))}%)`;
     const con = `contrast(${120 + Math.floor(60*Math.cos(now*0.0009))}%)`;
@@ -195,7 +197,6 @@ class Sprite{
     ctx.drawImage(this.img, -dw/2, -dh/2, dw, dh);
     ctx.restore();
 
-    // Гладкий «слайс‑глитч» редкими волнами
     if(rand()<0.06){
       const slices = rint(3,7);
       for(let i=0;i<slices;i++){
@@ -224,68 +225,9 @@ function populate(){
     sprites.push(new Sprite(images[rint(0,images.length-1)]));
   }
 }
-
-// Фоновая цветокоррекция всей сцены
 function sceneFilters(now){
   const hue = Math.floor((Math.sin(now*0.0002)+1)*90);
   const sat = 140 + Math.floor(40*Math.sin(now*0.0004+1.3));
   const con = 115 + Math.floor(30*Math.cos(now*0.00033+0.5));
   const brt = 102 + Math.floor(8*Math.sin(now*0.00027));
-  ctx.filter = `hue-rotate(${hue}deg) saturate(${sat}%) contrast(${con}%) brightness(${brt}%)`;
-}
-
-// ---------- Цикл ----------
-let running=true, last=0, acc=0;
-const info=document.getElementById('info');
-function tick(ts){
-  if(!running){ requestAnimationFrame(tick); return; }
-  if(!last) last=ts;
-  // dt с ограничением — для «равномерной» анимации на разных дисплеях
-  const dt=Math.min(32, ts-last); last=ts; acc+=dt;
-
-  // Очистка
-  ctx.setTransform(DPR,0,0,DPR,0,0);
-  ctx.globalCompositeOperation='source-over';
-  ctx.globalAlpha = 1; ctx.filter='none';
-  ctx.fillStyle = '#000'; ctx.fillRect(0,0, stage.width/DPR, stage.height/DPR);
-
-  // Общие фильтры сцены
-  sceneFilters(ts);
-
-  // Обновление спрайтов
-  for(const s of sprites){ s.step(ts); s.draw(ts); }
-
-  // Лёгкая виньетка
-  const W=stage.width/DPR, H=stage.height/DPR;
-  const grd=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.2, W/2,H/2,Math.max(W,H)*0.7);
-  grd.addColorStop(0,'rgba(0,0,0,0)');
-  grd.addColorStop(1,'rgba(0,0,0,0.18)');
-  ctx.filter='none';
-  ctx.globalCompositeOperation='multiply';
-  ctx.fillStyle=grd; ctx.fillRect(0,0,W,H);
-
-  info.textContent=`sprites:${sprites.length} seed:${seed>>>0}`;
-  requestAnimationFrame(tick);
-}
-
-// ---------- UI ----------
-document.getElementById('toggle').addEventListener('click',()=>{
-  running=!running;
-  document.getElementById('toggle').textContent = running?'Пауза':'Старт';
-});
-document.getElementById('reroll').addEventListener('click',()=>{
-  seed=Math.floor(Math.random()*1e9);
-  populate();
-});
-
-// ---------- Запуск ----------
-(async function init(){
-  fitSquare();
-  await loadAll();
-  populate();
-  requestAnimationFrame(tick);
-})();
-})();
-</script>
-</body>
-</html>
+  ctx.filter = `hue-rotate(${hue}deg) saturate(${sat
